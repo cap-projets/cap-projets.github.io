@@ -311,6 +311,13 @@ button[disabled]{opacity:.55;cursor:wait}
 .config-err{max-width:640px;margin:40px auto}
 a.file-link{color:var(--accent);font-weight:600;text-decoration:underline;text-underline-offset:2px;overflow-wrap:anywhere}
 @media (max-width:1040px){.shell.solo{grid-template-columns:minmax(0,1fr)}}
+.warn-txt{color:var(--warn);font-weight:600}
+.eleves-bloc{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+.eleves-tete{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.liste-eleves{columns:2;column-gap:32px;margin:10px 0 0;padding-left:24px;font-size:14px;line-height:1.6}
+.liste-eleves li{break-inside:avoid}
+@media (max-width:640px){.liste-eleves{columns:1}}
+#eleves{min-height:140px;font-family:inherit}
 </style>
 </head>
 <body>
@@ -329,6 +336,6 @@ a.file-link{color:var(--accent);font-weight:600;text-decoration:underline;text-u
 </div>
 <script src="config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.106.2"></script>
-<script src="app.js?v=2.0"></script>
+<script src="app.js?v=2.1"></script>
 </body>
 </html>

@@ -95,6 +95,10 @@ const state = {
   mustChange: false, authFlow: false, comptes: [], comptesRes: null
 };
 function me() { return state.me; }
+/* Liste des élèves participants : une ligne par élève (copiée depuis École Directe). */
+function lireEleves(texte) { return String(texte || "").split(/\r?\n/).map(l => l.replace(/\t+/g, " ").replace(/\s+/g, " ").trim()).filter(Boolean); }
+function doublons(liste) { const vus = new Set(), d = new Set(); liste.forEach(l => { const k = l.toLowerCase(); if (vus.has(k)) d.add(l); vus.add(k); }); return [...d]; }
+function voitListeEleves(r) { const m = me(); return !!m && (r.author && r.author.email === m.email || m.role === "chef" || m.role === "directeur" || ["compta", "viesco"].includes(m.service)); }
 
 /* ---------- Correspondance base <-> écran ---------- */
 function fromDb(x) {
@@ -103,7 +107,7 @@ function fromDb(x) {
     status: x.statut, unite: x.unite || "", type: x.type, destination: x.destination, pays: x.pays || "",
     titre: x.titre || "", lieu: x.lieu || "", objectifs: x.objectifs || "", disciplines: x.disciplines || "",
     dateDebut: x.date_debut || "", dateFin: x.date_fin || "", heureDepart: x.heure_depart || "", heureRetour: x.heure_retour || "", rdv: x.rdv || "",
-    classes: x.classes || "", nbEleves: num(x.nb_eleves), nbDP: num(x.nb_dp), sansRepas: !!x.sans_repas, besoins: !!x.besoins,
+    classes: x.classes || "", classeEntiere: x.classe_entiere !== false, eleves: [], nbEleves: num(x.nb_eleves), nbDP: num(x.nb_dp), sansRepas: !!x.sans_repas, besoins: !!x.besoins,
     observations: x.observations || "", intervenant: x.intervenant || "", reglement: x.reglement || "", technique: x.technique || {},
     accompagnateurs: x.accompagnateurs || [], transports: x.transports || [], hebergement: x.hebergement || "",
     depenses: x.depenses || {}, coutAccomp: num(x.cout_accomp), participation: num(x.participation),
@@ -117,7 +121,7 @@ function toDb(x) {
     unite: x.unite || null, type: x.type, destination: x.destination, pays: x.pays,
     titre: x.titre, lieu: x.lieu, objectifs: x.objectifs, disciplines: x.disciplines,
     date_debut: x.dateDebut || null, date_fin: x.dateFin || null, heure_depart: x.heureDepart, heure_retour: x.heureRetour, rdv: x.rdv,
-    classes: x.classes, nb_eleves: Math.max(0, Math.round(num(x.nbEleves))), nb_dp: x.sansRepas ? 0 : Math.max(0, Math.round(num(x.nbDP))), sans_repas: !!x.sansRepas, besoins: x.besoins,
+    classes: x.classes, classe_entiere: x.classeEntiere !== false, nb_eleves: Math.max(0, Math.round(num(x.nbEleves))), nb_dp: x.sansRepas ? 0 : Math.max(0, Math.round(num(x.nbDP))), sans_repas: !!x.sansRepas, besoins: x.besoins,
     accompagnateurs: x.accompagnateurs, transports: x.transports, hebergement: x.hebergement,
     depenses: x.depenses, cout_accomp: num(x.coutAccomp), participation: num(x.participation),
     observations: x.observations || "", intervenant: x.intervenant || "", reglement: x.reglement || "", technique: x.technique || {}
@@ -127,7 +131,7 @@ function mk(o) {
   return Object.assign({
     id: null, author: null, status: "brouillon", unite: "", type: "sortie", destination: "france", pays: "",
     titre: "", lieu: "", objectifs: "", disciplines: "", dateDebut: "", dateFin: "", heureDepart: "", heureRetour: "", rdv: "",
-    classes: "", nbEleves: 0, nbDP: 0, sansRepas: false, besoins: false, observations: "", intervenant: "", reglement: "", technique: {}, accompagnateurs: [], transports: [], hebergement: "", depenses: {}, coutAccomp: 0, participation: 0,
+    classes: "", classeEntiere: true, eleves: [], nbEleves: 0, nbDP: 0, sansRepas: false, besoins: false, observations: "", intervenant: "", reglement: "", technique: {}, accompagnateurs: [], transports: [], hebergement: "", depenses: {}, coutAccomp: 0, participation: 0,
     pieces: [], financement: null, taches: null, checklist: {}, checkDir: {}, historique: [], liens: {}
   }, o);
 }
@@ -310,6 +314,10 @@ async function loadDetail(id) {
   if (!a.data) { state.current = null; return; }
   const r = fromDb(a.data);
   r.historique = (b.data || []).map(h => ({ who: h.auteur, action: h.action, date: h.cree_le, comment: h.commentaire }));
+  if (!r.classeEntiere && voitListeEleves(r)) {
+    const p = await db.from("participants").select("eleves").eq("demande_id", id).maybeSingle();
+    if (!p.error && p.data) r.eleves = p.data.eleves || [];
+  }
   if (r.pieces.length) {
     const { data } = await db.storage.from(BUCKET).createSignedUrls(r.pieces.map(p => p.chemin), 3600);
     (data || []).forEach(x => { if (x && x.signedUrl) r.liens[x.path] = x.signedUrl; });
@@ -650,6 +658,15 @@ function renderSvc() {
     '<div class="stack">' + (todo.length ? todo.map(card).join("") : '<div class="card empty">Rien à faire pour le moment.</div>') +
     (done.length ? '<h2 style="margin-top:8px">Déjà faites</h2>' + done.map(card).join("") : "") + "</div>";
 }
+function blocEleves(r) {
+  if (r.classeEntiere) return "";
+  if (!voitListeEleves(r)) return '<p class="hint" style="margin-top:12px">Liste nominative réservée à la direction, à la vie scolaire et à la comptabilité.</p>';
+  const l = r.eleves || [];
+  if (!l.length) return '<p class="hint" style="margin-top:12px">Aucune liste d’élèves enregistrée.</p>';
+  return '<div class="eleves-bloc"><div class="eleves-tete"><strong>Élèves participants (' + l.length + ")</strong>" +
+    '<button type="button" class="btn small" data-action="copier-eleves">Copier la liste</button></div>' +
+    '<ol class="liste-eleves">' + l.map(e => "<li>" + esc(e) + "</li>").join("") + "</ol></div>";
+}
 function renderValid() {
   const rs = state.requests.filter(r => r.status === "validee");
   const avenir = rs.filter(r => daysUntil(r.dateFin || r.dateDebut) >= 0).sort(byDate);
@@ -764,8 +781,8 @@ function renderDetail(r) {
     ? [["Date", dateRange(r)], ["Horaires", horairesTexte(r)], ["Lieu dans l’établissement", r.lieu], ["Besoins techniques", besoinsTexte(r)], ["Précisions techniques", (r.technique || {}).precisions || ""]]
     : [["Date(s)", dateRange(r)], ["Horaires", horairesTexte(r)], ["Rendez-vous", r.rdv], ["Lieu", r.lieu], ["Transports", (r.transports || []).join(", ")]].concat(r.type === "voyage" ? [["Hébergement", r.hebergement]] : [])) + "</div>";
   const nAcc = (r.accompagnateurs || []).length;
-  h += '<div class="card"><h2>Élèves et encadrement</h2>' + kv([["Classes", r.classes], ["Élèves", plural(num(r.nbEleves), "élève")]].concat(interne(r) ? [["Paniers repas", repasAPrevoir(r) ? plural(num(r.nbDP), "panier") + " préparés par le chef de cuisine" : "aucun"]] : [["Demi-pensionnaires", r.sansRepas ? "aucun repas à prévoir par la restauration" : plural(num(r.nbDP), "élève")]], [["Besoins particuliers", r.besoins ? "oui (PAI, PPS ou AESH)" : "non signalés"], ["Encadrement", nAcc ? encadrement(nAcc, num(r.nbEleves)) : "aucun accompagnateur"]])) +
-    (nAcc ? '<div class="tbl-wrap" style="margin-top:12px"><table class="t"><thead><tr><th>Accompagnateur</th><th>Qualité</th></tr></thead><tbody>' + r.accompagnateurs.map(a => "<tr><td>" + esc(a.nom) + "</td><td>" + esc(QUALITES[a.qualite] || a.qualite) + "</td></tr>").join("") + "</tbody></table></div>" : "") + "</div>";
+  h += '<div class="card"><h2>Élèves et encadrement</h2>' + kv([["Classes", r.classes], ["Élèves", plural(num(r.nbEleves), "élève")], ["Participation", r.classeEntiere ? "toute la classe" : "une partie des élèves seulement (liste nominative)"]].concat(interne(r) ? [["Paniers repas", repasAPrevoir(r) ? plural(num(r.nbDP), "panier") + " préparés par le chef de cuisine" : "aucun"]] : [["Demi-pensionnaires", r.sansRepas ? "aucun repas à prévoir par la restauration" : plural(num(r.nbDP), "élève")]], [["Besoins particuliers", r.besoins ? "oui (PAI, PPS ou AESH)" : "non signalés"], ["Encadrement", nAcc ? encadrement(nAcc, num(r.nbEleves)) : "aucun accompagnateur"]])) +
+    (nAcc ? '<div class="tbl-wrap" style="margin-top:12px"><table class="t"><thead><tr><th>Accompagnateur</th><th>Qualité</th></tr></thead><tbody>' + r.accompagnateurs.map(a => "<tr><td>" + esc(a.nom) + "</td><td>" + esc(QUALITES[a.qualite] || a.qualite) + "</td></tr>").join("") + "</tbody></table></div>" : "") + blocEleves(r) + "</div>";
   const depRows = DEPENSES.filter(([k]) => num((r.depenses || {})[k]) > 0);
   h += '<div class="card"><h2>Budget</h2><div class="tbl-wrap"><table class="t"><thead><tr><th>Dépense</th><th class="r">Montant</th></tr></thead><tbody>' +
     (depRows.length ? depRows.map(([k, l]) => "<tr><td>" + l + '</td><td class="r money">' + eur(num(r.depenses[k])) + "</td></tr>").join("") : '<tr><td colspan="2" class="hint">Aucune dépense pour les élèves.</td></tr>') +
@@ -863,6 +880,10 @@ function renderForm(r) {
     '<div class="grid3">' + fld("heureDepart", "Heure de départ", x.heureDepart, { type: "time", req: true }) + fld("heureRetour", "Heure de retour", x.heureRetour, { type: "time", req: true }) + fld("rdv", "Lieu de rendez-vous", x.rdv, { ph: "Ex. : gare RER d’Aulnay", if: "dehors" }) + "</div></fieldset>";
   h += '<fieldset><legend>4. Élèves</legend>' + fld("classes", "Classe(s)", x.classes, { req: true, ph: "Ex. : 3e A, 3e B" }) + '<div class="grid2">' + fld("nbEleves", "Nombre d’élèves", x.nbEleves || "", { type: "number", min: 1, req: true, mode: "numeric" }) +
     fld("nbDP", "Dont demi-pensionnaires", x.nbDP || "", { type: "number", min: 0, mode: "numeric", if: "repas", req: true, hint: "Le chef de cuisine sera prévenu pour les paniers repas." }) + "</div>" +
+    '<div class="field"><span class="label">Participation</span>' + radios("participation", "Participation", [["classe", "Toute la classe", "ou toutes les classes indiquées"], ["partielle", "Une partie des élèves", "liste nominative à joindre"]], x.classeEntiere === false ? "partielle" : "classe") + "</div>" +
+    fld("eleves", "Liste des élèves participants", (x.eleves || []).join("\n"), { area: true, req: true, if: "partielle", ph: "DUPONT Léa – 4e A\nMARTIN Hugo – 4e B",
+      hint: "Copiez les élèves depuis École Directe et collez-les ici : un élève par ligne, avec sa classe. Seules la direction, la vie scolaire et la comptabilité verront cette liste." }) +
+    '<p class="hint" id="eleves-compte" data-if="partielle" aria-live="polite"></p>' +
     '<label class="inline" for="paniersEvt" data-if="etablissement"><input type="checkbox" id="paniersEvt"' + (interne(x) && !x.sansRepas ? " checked" : "") + "> <span>Des paniers repas sont à prévoir par le chef de cuisine (par exemple pour un pique-nique pris avec des élèves extérieurs)</span></label>" +
     '<label class="inline" for="sansRepas" data-if="dehors"><input type="checkbox" id="sansRepas" name="sansRepas"' + (x.sansRepas ? " checked" : "") + "> <span>Aucun repas à prévoir par le service de restauration (pique-nique fourni par les familles, repas sur place, retour avant le déjeuner…)</span></label>" +
     '<label class="inline" for="besoins"><input type="checkbox" id="besoins" name="besoins"' + (x.besoins ? " checked" : "") + "> <span>Des élèves ont des besoins particuliers (PAI, PPS, accompagnement AESH)</span></label>" +
@@ -902,7 +923,7 @@ function readForm() {
   return { unite: radioVal(f, "unite"), type, destination: dedans ? "france" : dest, pays: !dedans && dest === "etranger" ? g("pays") : "",
     titre: g("titre"), lieu: g("lieu"), objectifs: g("objectifs"), disciplines: g("disciplines"),
     dateDebut: g("dateDebut"), dateFin: type === "voyage" ? g("dateFin") : "", heureDepart: g("heureDepart"), heureRetour: g("heureRetour"), rdv: dedans ? "" : g("rdv"),
-    classes: g("classes"), nbEleves: num(g("nbEleves")), nbDP: (dedans ? !$("#paniersEvt").checked : $("#sansRepas").checked) ? 0 : num(g("nbDP")), sansRepas: dedans ? !$("#paniersEvt").checked : $("#sansRepas").checked, besoins: $("#besoins").checked, accompagnateurs: acc,
+    classes: g("classes"), classeEntiere: radioVal(f, "participation") !== "partielle", eleves: radioVal(f, "participation") === "partielle" ? lireEleves($("#eleves").value) : [], nbEleves: num(g("nbEleves")), nbDP: (dedans ? !$("#paniersEvt").checked : $("#sansRepas").checked) ? 0 : num(g("nbDP")), sansRepas: dedans ? !$("#paniersEvt").checked : $("#sansRepas").checked, besoins: $("#besoins").checked, accompagnateurs: acc,
     transports: dedans ? [] : $$('input[name="transports"]:checked', f).map(i => i.value).concat($("#tr-autre").checked ? [g("trAutre") || "Autre"] : []), hebergement: type === "voyage" ? g("hebergement") : "",
     depenses: dep, coutAccomp: dedans ? 0 : num(g("coutAccomp")), participation: num(g("participation")), pieces: [...state.formPieces],
     intervenant: dedans ? g("intervenant") : "", reglement: g("reglement"), observations: g("observations"),
@@ -925,6 +946,12 @@ function validateForm(x) {
   if (x.type !== "etablissement" && x.destination === "etranger" && !x.pays) e.pays = "Indiquez le pays.";
   if (!x.classes) e.classes = "Indiquez la ou les classes.";
   if (!(x.nbEleves > 0)) e.nbEleves = "Indiquez le nombre d’élèves.";
+  if (x.classeEntiere === false) {
+    const dbl = doublons(x.eleves || []);
+    if (!(x.eleves || []).length) e.eleves = "Collez la liste des élèves participants, un par ligne.";
+    else if (dbl.length) e.eleves = "Élève(s) en double dans la liste : " + dbl.join(", ") + ".";
+    else if (x.nbEleves > 0 && x.eleves.length !== x.nbEleves) e.eleves = "La liste contient " + plural(x.eleves.length, "élève") + " alors que vous en avez indiqué " + x.nbEleves + " : corrigez la liste ou le nombre d’élèves.";
+  }
   if (!x.sansRepas && !(x.nbDP > 0)) e.nbDP = x.type === "etablissement" ? "Indiquez le nombre de paniers repas, ou décochez « Des paniers repas sont à prévoir »." : "Indiquez le nombre de demi-pensionnaires, ou cochez « Aucun repas à prévoir ».";
   else if (x.nbDP > x.nbEleves) e.nbDP = "Le nombre de demi-pensionnaires dépasse le nombre d’élèves.";
   if (!x.accompagnateurs.length) e.acc = x.type === "etablissement" ? "Indiquez au moins un adulte chargé de l’encadrement." : "Indiquez au moins un accompagnateur.";
@@ -954,9 +981,15 @@ function syncForm() {
   const f = $("#req-form"); if (!f) return;
   const type = radioVal(f, "type") || "sortie", dedans = type === "etablissement", dest = dedans ? "france" : radioVal(f, "destination");
   const montre = c => c === "voyage" ? type === "voyage" : c === "etranger" ? dest === "etranger" : c === "dehors" ? !dedans : c === "etablissement" ? dedans
-    : c === "repas" ? (dedans ? $("#paniersEvt").checked : !$("#sansRepas").checked) : c === "tr-autre" ? $("#tr-autre").checked : c.startsWith("dep-") ? depVisible(c.slice(4), type) : true;
+    : c === "repas" ? (dedans ? $("#paniersEvt").checked : !$("#sansRepas").checked) : c === "tr-autre" ? $("#tr-autre").checked : c === "partielle" ? radioVal(f, "participation") === "partielle" : c.startsWith("dep-") ? depVisible(c.slice(4), type) : true;
   $$("[data-if]", f).forEach(el => { const c = el.dataset.if; if (c) el.classList.toggle("hidden", !montre(c)); });
   $("#leg-acc").textContent = dedans ? "5. Encadrement" : "5. Accompagnateurs";
+  const ce = $("#eleves-compte");
+  if (ce) {
+    const n = lireEleves($("#eleves").value).length, annonce = num($("#nbEleves").value);
+    ce.textContent = !n ? "" : plural(n, "élève") + " dans la liste" + (annonce > 0 && annonce !== n ? " – vous avez indiqué " + annonce + " élèves." : annonce === n ? " – conforme au nombre d’élèves indiqué." : ".");
+    ce.classList.toggle("warn-txt", annonce > 0 && n > 0 && annonce !== n);
+  }
   const lab = (id, t) => { const l = f.querySelector('label[for="' + id + '"]'); if (!l) return; const star = l.querySelector(".req-star"); l.textContent = t; if (star) l.append(" ", star); };
   lab("dateDebut", dedans ? "Date" : "Date (ou date de départ)");
   lab("heureDepart", dedans ? "Heure de début" : "Heure de départ");
@@ -996,6 +1029,8 @@ async function saveRequest(mode) {
       const res = await db.from("demandes").update(payload).eq("id", id).select().single();
       if (res.error) throw res.error;
     }
+    const lp = await db.from("participants").upsert({ demande_id: id, eleves: x.classeEntiere ? [] : x.eleves }, { onConflict: "demande_id" });
+    if (lp.error) throw new Error("La liste des élèves n’a pas pu être enregistrée : " + lp.error.message);
     const pieces = state.formPieces.slice();
     for (const f of files) {
       const chemin = id + "/" + Date.now() + "-" + safeFileName(f.name);
@@ -1145,6 +1180,13 @@ document.addEventListener("click", e => {
       const label = a.textContent;
       const fini = t => { a.textContent = t; setTimeout(() => { if (a.isConnected) a.textContent = label; }, 2000); };
       try { navigator.clipboard.writeText(texte).then(() => fini("Copié"), () => fini("Copie impossible")); } catch (err) { fini("Copie impossible"); }
+      break;
+    }
+    case "copier-eleves": {
+      const l = state.current && state.current.eleves || []; if (!l.length) break;
+      const label = a.textContent;
+      const fini = t => { a.textContent = t; setTimeout(() => { if (a.isConnected) a.textContent = label; }, 2000); };
+      try { navigator.clipboard.writeText(l.join("\n")).then(() => fini("Liste copiée"), () => fini("Copie impossible")); } catch (err) { fini("Copie impossible"); }
       break;
     }
     case "compte-reinit": actionComptes({ action: "reinitialiser_compte", email: a.dataset.email }, () => "Nouveau mot de passe provisoire créé pour " + a.dataset.email + "."); break;
